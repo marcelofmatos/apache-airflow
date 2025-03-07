@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+
+#  airflow-init:
+#    image: apache/airflow:2.10.5
+#    container_name: airflow-init
+#    entrypoint: ["/bin/bash", "-c"]
+#    command: >
+#      "airflow db init &&
+#      airflow users create --username admin --password test --firstname Marcelo --lastname Matos --role Admin --email admin@localhost.locadomain"
+#    environment:
+#      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+#      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+#    depends_on:
+#      - postgres
+#    restart: "no"
+#    networks:
+#      - default
+#    deploy:
+#      placement:
+#        constraints:
+#          - node.labels.app == true
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - default
+    deploy:
+      placement:
+        constraints:
+          - node.labels.database == true
+
+  redis:
+    image: redis:latest
+    networks:
+      - default
+    deploy:
+      placement:
+        constraints:
+          - node.labels.app == true
+
+  airflow-webserver:
+    image: apache/airflow:2.10.5
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__WEBSERVER__BASE_URL: http://addressforall.org/flow
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - airflow_plugins:/opt/airflow/plugins
+    networks:
+      - default
+      - proxy
+    command: webserver
+    deploy:
+      placement:
+        constraints:
+          - node.labels.app == true
+
+      labels:
+        - traefik.enable=true
+        - traefik.http.services.airflow.loadbalancer.server.port=8080
+        - traefik.http.routers.airflow.entrypoints=websecure
+        - traefik.http.routers.airflow.tls.certresolver=myresolver
+        - traefik.http.routers.airflow.rule=Host(`addressforall.org`) && PathPrefix(`/flow`)
+        #- traefik.http.middlewares.airflow-strip-prefix.stripprefix.prefixes=/flow
+        #- traefik.http.routers.airflow.middlewares=airflow-strip-prefix
+        - traefik.http.routers.airflow.priority=100
+            
+      
+  airflow-scheduler:
+    image: apache/airflow:2.10.5
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - airflow_plugins:/opt/airflow/plugins
+    networks:
+      - default
+    deploy:
+      placement:
+        constraints:
+          - node.labels.app == true
+    command: scheduler
+
+  airflow-worker:
+    image: apache/airflow:2.10.5
+    depends_on:
+      - airflow-scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - airflow_plugins:/opt/airflow/plugins
+    networks:
+      - default
+    deploy:
+      placement:
+        constraints:
+          - node.labels.app == true
+    command: celery worker
+
+volumes:
+  postgres-data:
+  airflow_dags:
+  airflow_logs:
+  airflow_plugins:
+
+networks:
+  proxy:
+    name: proxy
+    external: true
